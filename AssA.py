@@ -422,36 +422,54 @@ def sig(s, f):
 
 
 def setup_warp(target):
-    """Auto-setup WARP split-tunnel (only routes TARGET via CF, SSH stays up)."""
+    """Auto-setup WARP split-tunnel. If WARP can't carry traffic, fall back to direct."""
     import subprocess
     print(c("C", f"\n  ═══ WARP SETUP (target {target}) ═══"))
-    # Register if needed
-    if not os.path.exists("/tmp/wgcf-account.toml"):
-        print(f"  {c('C','▸')} Registering WARP...")
-        subprocess.run(["wgcf", "register", "--accept-tos"], cwd="/tmp",
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Generate profile
-    print(f"  {c('C','▸')} Generating profile...")
-    subprocess.run(["wgcf", "generate"], cwd="/tmp",
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Rewrite AllowedIPs to ONLY target
+    warp_ok = False
     try:
+        # Register if needed
+        if not os.path.exists("/tmp/wgcf-account.toml"):
+            print(f"  {c('C','▸')} Registering WARP...")
+            subprocess.run(["wgcf", "register", "--accept-tos"], cwd="/tmp",
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Generate profile
+        print(f"  {c('C','▸')} Generating profile...")
+        subprocess.run(["wgcf", "generate"], cwd="/tmp",
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Rewrite AllowedIPs to ONLY target
         with open("/tmp/wgcf-profile.conf") as f:
             cfg = f.read()
         cfg = re.sub(r'AllowedIPs = [^\n]+', f'AllowedIPs = {target}/32', cfg, flags=re.M)
         cfg = re.sub(r'\nAllowedIPs = ::/0', '', cfg)
         with open("/tmp/wgcf-profile.conf", "w") as f:
             f.write(cfg)
-    except Exception as e:
-        print(f"  {c('R','✗')} Profile error: {e}")
-    # Connect
-    print(f"  {c('C','▸')} Connecting WARP...")
-    r = subprocess.run(["wg-quick", "up", "/tmp/wgcf-profile.conf"],
+        # Connect
+        print(f"  {c('C','▸')} Connecting WARP...")
+        subprocess.run(["wg-quick", "up", "/tmp/wgcf-profile.conf"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if r.returncode == 0:
-        print(f"  {c('G','✓')} WARP up (routes only {target} via Cloudflare)")
-    else:
-        print(f"  {c('Y','!')} WARP already up or minor issue — continuing")
+        time.sleep(2)
+        # TEST: does traffic actually go through WARP?
+        print(f"  {c('C','▸')} Testing WARP traffic...")
+        r = subprocess.run(
+            ["curl", "-4", "--interface", "wgcf-profile", "-s", "--connect-timeout", "6",
+             "https://cloudflare.com/cdn-cgi/trace"],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and "fl=" in r.stdout:
+            warp_ok = True
+            print(f"  {c('G','✓')} WARP carries traffic (via Cloudflare)")
+        else:
+            print(f"  {c('Y','!')} WARP connected but no traffic — using direct route")
+    except Exception as e:
+        print(f"  {c('Y','!')} WARP setup issue: {e} — using direct route")
+
+    if not warp_ok:
+        # Tear down WARP so traffic goes direct (works on boxes where WG egress is blocked)
+        try:
+            subprocess.run(["wg-quick", "down", "/tmp/wgcf-profile.conf"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        print(f"  {c('Y','▸')} Direct route active (no WARP tunnel)")
     time.sleep(1)
 
 
