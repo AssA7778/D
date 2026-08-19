@@ -1,8 +1,8 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
 #  AssA — One-Line Installer (from GitHub)
-#  Usage: bash <(curl -s https://raw.githubusercontent.com/AssA7778/D/main/install.sh) 45.74.159.134
-#  Or:    wget -qO- https://raw.githubusercontent.com/AssA7778/D/main/install.sh | bash -s 45.74.159.134
+#  NO IP needed — IP is asked at runtime (run.sh)
+#  Usage: bash <(curl -s https://raw.githubusercontent.com/AssA7778/D/main/install.sh)
 # ═══════════════════════════════════════════════════════════════
 
 set -e
@@ -12,7 +12,6 @@ ok(){ echo -e "  ${G}✓${X} $1"; }
 err(){ echo -e "  ${R}✗${X} $1"; }
 
 REPO_RAW="https://raw.githubusercontent.com/AssA7778/D/main"
-TARGET="${1:-45.74.159.134}"
 
 echo -e "${R}"
 echo " █████╗ ███████╗███████╗"
@@ -22,7 +21,7 @@ echo "██╔══██║╚════██║╚════██║"
 echo "██║  ██║███████║███████║"
 echo "╚═╝  ╚═╝╚══════╝╚══════╝"
 echo -e "${X}"
-echo -e "  ${Y}AssA One-Line Installer${X}  (target: ${C}$TARGET${X})\n"
+echo -e "  ${Y}AssA One-Line Installer${X}  (no target needed)\n"
 
 if [[ $EUID -ne 0 ]]; then err "Run as root"; exit 1; fi
 
@@ -50,7 +49,7 @@ pip3 install --break-system-packages -q pysocks requests 2>/dev/null || pip3 ins
 ok "Dependencies installed"
 
 # ── 3. wgcf (WARP client) ──
-info "Setting up Cloudflare WARP..."
+info "Setting up Cloudflare WARP client..."
 if [[ ! -f /usr/local/bin/wgcf ]]; then
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -61,41 +60,20 @@ if [[ ! -f /usr/local/bin/wgcf ]]; then
     wget -q "https://github.com/ViRb3/wgcf/releases/download/v2.2.3/wgcf_2.2.3_linux_${WARCH}" -O /usr/local/bin/wgcf
     chmod +x /usr/local/bin/wgcf
 fi
-ok "wgcf ready"
-
-# ── 4. Register WARP + split-tunnel profile ──
-info "Registering WARP + generating split-tunnel profile..."
-cd /tmp
+# Register WARP account (no IP needed)
 if [[ ! -f /tmp/wgcf-account.toml ]]; then
     wgcf register --accept-tos >/dev/null 2>&1
 fi
-wgcf generate >/dev/null 2>&1
-export ASSA_TARGET="$TARGET"
-python3 - << 'PYEOF'
-import re, os
-tgt = os.environ.get("ASSA_TARGET", "45.74.159.134")
-with open('/tmp/wgcf-profile.conf') as f:
-    cfg = f.read()
-cfg = re.sub(r'AllowedIPs = [^\n]+', f'AllowedIPs = {tgt}/32', cfg, flags=re.M)
-cfg = re.sub(r'\nAllowedIPs = ::/0', '', cfg)
-with open('/tmp/wgcf-profile.conf','w') as f:
-    f.write(cfg)
-PYEOF
-ok "Profile at /tmp/wgcf-profile.conf (routes only $TARGET via WARP)"
+ok "wgcf ready (WARP account registered)"
 
-# ── 5. Install files ──
+# ── 4. Install files ──
 info "Installing AssA.py + run.sh to /root/..."
 cp "$TMP/AssA.py" /root/AssA.py
 cp "$TMP/run.sh" /root/run.sh
 ok "Installed"
 
-# ── 6. Verify ──
+# ── 5. Verify AssA syntax ──
 info "Verifying..."
-if wg-quick up /tmp/wgcf-profile.conf >/dev/null 2>&1; then
-    ok "WARP connected"
-else
-    err "WARP failed (check manually: wg-quick up /tmp/wgcf-profile.conf)"
-fi
 if python3 -c "import py_compile; py_compile.compile('/root/AssA.py', doraise=True)" 2>/dev/null; then
     ok "AssA.py valid"
 else
@@ -107,9 +85,7 @@ echo ""
 echo -e "  ${G}══════════════════════════════════════════════════${X}"
 echo -e "  ${G}✓ AssA installed!${X}"
 echo -e ""
-echo -e "  ${Y}Run now:${X}"
-echo -e "    ${C}bash /root/run.sh${X}                    ${Y}# interactive (IP + yes)${X}"
-echo -e "    ${C}python3 /root/AssA.py${X}                ${Y}# same${X}"
-echo -e "    ${C}python3 /root/AssA.py --target $TARGET --mode recycle --yes${X}"
+echo -e "  ${Y}Run now (it will ask for target IP):${X}"
+echo -e "    ${C}bash /root/run.sh${X}"
 echo -e "  ${G}══════════════════════════════════════════════════${X}\n"
 rm -rf "$TMP"

@@ -24,7 +24,7 @@ Usage:
 ⚠ ONLY against YOUR OWN server.
 """
 
-import os, sys, time, signal, socket, ssl, argparse, random, json, string
+import os, sys, time, signal, socket, ssl, argparse, random, json, string, re
 import multiprocessing as mp
 from datetime import datetime
 from collections import deque
@@ -394,6 +394,40 @@ def sig(s, f):
     print(c("R","\n[!] Stopping...")); STOP.set(); os._exit(0)
 
 
+def setup_warp(target):
+    """Auto-setup WARP split-tunnel (only routes TARGET via CF, SSH stays up)."""
+    import subprocess
+    print(c("C", f"\n  ═══ WARP SETUP (target {target}) ═══"))
+    # Register if needed
+    if not os.path.exists("/tmp/wgcf-account.toml"):
+        print(f"  {c('C','▸')} Registering WARP...")
+        subprocess.run(["wgcf", "register", "--accept-tos"], cwd="/tmp",
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Generate profile
+    print(f"  {c('C','▸')} Generating profile...")
+    subprocess.run(["wgcf", "generate"], cwd="/tmp",
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Rewrite AllowedIPs to ONLY target
+    try:
+        with open("/tmp/wgcf-profile.conf") as f:
+            cfg = f.read()
+        cfg = re.sub(r'AllowedIPs = [^\n]+', f'AllowedIPs = {target}/32', cfg, flags=re.M)
+        cfg = re.sub(r'\nAllowedIPs = ::/0', '', cfg)
+        with open("/tmp/wgcf-profile.conf", "w") as f:
+            f.write(cfg)
+    except Exception as e:
+        print(f"  {c('R','✗')} Profile error: {e}")
+    # Connect
+    print(f"  {c('C','▸')} Connecting WARP...")
+    r = subprocess.run(["wg-quick", "up", "/tmp/wgcf-profile.conf"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if r.returncode == 0:
+        print(f"  {c('G','✓')} WARP up (routes only {target} via Cloudflare)")
+    else:
+        print(f"  {c('Y','!')} WARP already up or minor issue — continuing")
+    time.sleep(1)
+
+
 def main():
     banner()
     ap = argparse.ArgumentParser()
@@ -415,6 +449,9 @@ def main():
         target = args.target
     if not target:
         sys.exit(c("R","  [!] no target"))
+
+    # Auto-setup WARP split-tunnel for this target (no SSH drop)
+    setup_warp(target)
 
     if not args.mode:
         print(c("C","\n  ╔════════════════════════════════════════════════╗"))
