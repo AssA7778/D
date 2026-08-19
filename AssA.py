@@ -402,7 +402,7 @@ def main():
     ap.add_argument("--port", type=int, default=443)
     ap.add_argument("--no-ssl", action="store_true")
     ap.add_argument("--conns", type=int, default=50)
-    ap.add_argument("--pipeline", type=int, default=500)
+    ap.add_argument("--pipeline", type=int, default=100)
     ap.add_argument("--duration", type=int, default=60)
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
@@ -445,6 +445,8 @@ def main():
     elif mode == "analyze":
         analyze_mode(target)
     else:
+        for i in range(6): STAT[i] = 0
+        STOP.clear()
         attack_mode(target, args.port, use_ssl, mode, args.duration, args.conns, args.pipeline)
 
     # Save report
