@@ -1,7 +1,8 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-#  AssA — One-Command Installer
-#  Does EVERYTHING: deps + WARP + AssA.py + verify
+#  AssA — One-Line Installer (from GitHub)
+#  Usage: bash <(curl -s https://raw.githubusercontent.com/AssA7778/D/main/install.sh) 45.74.159.134
+#  Or:    wget -qO- https://raw.githubusercontent.com/AssA7778/D/main/install.sh | bash -s 45.74.159.134
 # ═══════════════════════════════════════════════════════════════
 
 set -e
@@ -9,6 +10,9 @@ R="\033[91m"; G="\033[92m"; Y="\033[93m"; C="\033[96m"; X="\033[0m"
 info(){ echo -e "  ${C}▸${X} $1"; }
 ok(){ echo -e "  ${G}✓${X} $1"; }
 err(){ echo -e "  ${R}✗${X} $1"; }
+
+REPO_RAW="https://raw.githubusercontent.com/AssA7778/D/main"
+TARGET="${1:-45.74.159.134}"
 
 echo -e "${R}"
 echo " █████╗ ███████╗███████╗"
@@ -18,15 +22,22 @@ echo "██╔══██║╚════██║╚════██║"
 echo "██║  ██║███████║███████║"
 echo "╚═╝  ╚═╝╚══════╝╚══════╝"
 echo -e "${X}"
-echo -e "  ${Y}AssA One-Command Installer${X}\n"
+echo -e "  ${Y}AssA One-Line Installer${X}  (target: ${C}$TARGET${X})\n"
 
-if [[ $EUID -ne 0 ]]; then err "Run as root: sudo bash install.sh"; exit 1; fi
+if [[ $EUID -ne 0 ]]; then err "Run as root"; exit 1; fi
 
-TARGET="${1:-45.74.159.134}"
-info "Target (split-tunnel): $TARGET"
+TMP=$(mktemp -d)
+cd "$TMP"
 
-# ── 1. System deps ──
-info "Step 1/5: Installing system dependencies..."
+# ── 1. Download AssA.py + run.sh from repo ──
+info "Downloading AssA toolkit from GitHub..."
+wget -q "$REPO_RAW/AssA.py" -O AssA.py
+wget -q "$REPO_RAW/run.sh" -O run.sh
+chmod +x AssA.py run.sh
+ok "Downloaded"
+
+# ── 2. System deps ──
+info "Installing dependencies..."
 if command -v apt-get >/dev/null; then
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-pip wireguard-tools wget curl git unzip ca-certificates >/dev/null 2>&1
@@ -38,8 +49,8 @@ fi
 pip3 install --break-system-packages -q pysocks requests 2>/dev/null || pip3 install -q pysocks requests 2>/dev/null || true
 ok "Dependencies installed"
 
-# ── 2. wgcf ──
-info "Step 2/5: Setting up Cloudflare WARP (wgcf)..."
+# ── 3. wgcf (WARP client) ──
+info "Setting up Cloudflare WARP..."
 if [[ ! -f /usr/local/bin/wgcf ]]; then
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -52,14 +63,13 @@ if [[ ! -f /usr/local/bin/wgcf ]]; then
 fi
 ok "wgcf ready"
 
-# ── 3. Register WARP + split-tunnel profile ──
-info "Step 3/5: Registering WARP + generating split-tunnel profile..."
+# ── 4. Register WARP + split-tunnel profile ──
+info "Registering WARP + generating split-tunnel profile..."
 cd /tmp
 if [[ ! -f /tmp/wgcf-account.toml ]]; then
     wgcf register --accept-tos >/dev/null 2>&1
 fi
 wgcf generate >/dev/null 2>&1
-# Rewrite AllowedIPs to ONLY target (prevents SSH drop on this box)
 export ASSA_TARGET="$TARGET"
 python3 - << 'PYEOF'
 import re, os
@@ -73,42 +83,33 @@ with open('/tmp/wgcf-profile.conf','w') as f:
 PYEOF
 ok "Profile at /tmp/wgcf-profile.conf (routes only $TARGET via WARP)"
 
-# ── 4. AssA.py ──
-info "Step 4/5: Installing AssA.py..."
-SRC="$(dirname "$0")/AssA.py"
-if [[ -s "$SRC" ]] && python3 -c "import py_compile; py_compile.compile('$SRC', doraise=True)" 2>/dev/null; then
-    cp "$SRC" /root/AssA.py
-    ok "AssA.py copied from local"
-else
-    # Fallback: download from repo
-    wget -q "https://raw.githubusercontent.com/AssA7778/D/main/AssA.py" -O /root/AssA.py 2>/dev/null || true
-    ok "AssA.py downloaded from repo"
-fi
-chmod +x /root/AssA.py
-ok "AssA.py at /root/AssA.py"
+# ── 5. Install files ──
+info "Installing AssA.py + run.sh to /root/..."
+cp "$TMP/AssA.py" /root/AssA.py
+cp "$TMP/run.sh" /root/run.sh
+ok "Installed"
 
-# ── 5. Verify WARP + AssA ──
-info "Step 5/5: Verifying setup..."
+# ── 6. Verify ──
+info "Verifying..."
 if wg-quick up /tmp/wgcf-profile.conf >/dev/null 2>&1; then
-    ok "WARP connected (split-tunnel)"
+    ok "WARP connected"
 else
-    err "WARP failed to connect — check manually"
+    err "WARP failed (check manually: wg-quick up /tmp/wgcf-profile.conf)"
 fi
-sleep 1
 if python3 -c "import py_compile; py_compile.compile('/root/AssA.py', doraise=True)" 2>/dev/null; then
-    ok "AssA.py syntax valid"
+    ok "AssA.py valid"
 else
-    err "AssA.py has syntax errors"
+    err "AssA.py syntax error"
 fi
 
 # ── Done ──
 echo ""
 echo -e "  ${G}══════════════════════════════════════════════════${X}"
-echo -e "  ${G}✓ AssA fully installed & verified!${X}"
+echo -e "  ${G}✓ AssA installed!${X}"
 echo -e ""
-echo -e "  ${Y}Now run:${X}"
-echo -e "    ${C}wg-quick up /tmp/wgcf-profile.conf${X}   ${Y}# (if not already up)${X}"
+echo -e "  ${Y}Run now:${X}"
+echo -e "    ${C}bash /root/run.sh${X}                    ${Y}# interactive (IP + yes)${X}"
+echo -e "    ${C}python3 /root/AssA.py${X}                ${Y}# same${X}"
 echo -e "    ${C}python3 /root/AssA.py --target $TARGET --mode recycle --yes${X}"
-echo -e "    ${C}python3 /root/AssA.py${X}                    ${Y}# interactive menu${X}"
-echo -e "    ${C}wg-quick down /tmp/wgcf-profile.conf${X}   ${Y}# disconnect${X}"
 echo -e "  ${G}══════════════════════════════════════════════════${X}\n"
+rm -rf "$TMP"
